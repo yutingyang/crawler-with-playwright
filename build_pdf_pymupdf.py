@@ -13,28 +13,42 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 from PIL import Image
 
 from common import (OUT, PAGE_H_PX, PAGE_W_PX, PAGES, PX_TO_PT, TEXT_SCALE,
-                    page_html, page_image, parse_style, px, viewer_rules)
+                    font_files, page_html, page_image, parse_style, px, viewer_rules)
 
-# The ffN web fonts are never downloaded, so the browser falls back to Arial / Times New Roman.
-# PDF Base-14 Helvetica / Times have the same metrics.
+# Fallback when an ffN web font is missing: the CSS falls back to Arial / Times New Roman,
+# whose metrics match PDF Base-14 Helvetica / Times.
 BASE14 = {  # (serif, bold, italic) -> Base-14 name
     (False, False, False): "helv", (False, True, False): "hebo", (False, False, True): "heit", (False, True, True): "hebi",
     (True, False, False): "tiro", (True, True, False): "tibo", (True, False, True): "tiit", (True, True, True): "tibi",
 }
-# span.a has line-height:1, so baseline = top + (ascent - half of (ascent+descent-1)) * font-size
-BASELINE = {False: 0.905 - (0.905 + 0.212 - 1) / 2,   # Arial
-            True: 0.891 - (0.891 + 0.216 - 1) / 2}    # Times New Roman
+ARIAL_TIMES_METRICS = {False: (0.905, -0.212), True: (0.891, -0.216)}  # (ascender, descender) in em
+
+
+def baseline_factor(ascender: float, descender: float) -> float:
+    """span.a has line-height:1 -> half-leading = (1 - (asc - desc)) / 2, baseline = top + half-leading + asc."""
+    return (1 + ascender + descender) / 2
 
 
 def font_table():
-    """div.ffN -> (fitz.Font, serif) from rules like `div.ff11 span { font-family: ff11, Arial...; font-weight: bold; ... }`."""
+    """div.ffN -> (fitz.Font, baseline factor).
+
+    Prefer the real web font embedded in ttfs.css (what the viewer actually renders with);
+    glyph widths must match, otherwise long spans drift away from the next absolutely-positioned span.
+    """
+    embedded = font_files()
     table = {}
     for r in viewer_rules():
         m = re.match(r"div\.(ff\d+) span \{ font-family: [^,]+, (.+?); font-weight: (\w+); font-style: (\w+);", r)
-        if m:
+        if not m:
+            continue
+        ff = m.group(1)
+        if ff in embedded:
+            font = fitz.Font(fontbuffer=embedded[ff])
+            table[ff] = (font, baseline_factor(font.ascender, font.descender))
+        else:
             serif = "Times" in m.group(2)
-            name = BASE14[(serif, m.group(3) == "bold", m.group(4) == "italic")]
-            table[m.group(1)] = (fitz.Font(name), serif)
+            font = fitz.Font(BASE14[(serif, m.group(3) == "bold", m.group(4) == "italic")])
+            table[ff] = (font, baseline_factor(*ARIAL_TIMES_METRICS[serif]))
     return table
 
 
@@ -55,12 +69,12 @@ def draw_images(page: fitz.Page, soup: BeautifulSoup, n: int):
         page.insert_image(rect, stream=buf.getvalue())
 
 
-def layout_span(span: Tag, font: fitz.Font, serif: bool, fs: float, tw: fitz.TextWriter):
+def layout_span(span: Tag, font: fitz.Font, base: float, fs: float, tw: fitz.TextWriter):
     """Replay the browser's inline layout of one span.a, glyph by glyph, in text_layer units."""
     st = parse_style(span.get("style"))
     letter_sp, word_sp = px(st.get("letter-spacing")), px(st.get("word-spacing"))
     x = px(st.get("left"))
-    baseline = px(st.get("top")) + fs * BASELINE[serif]
+    baseline = px(st.get("top")) + fs * base
     k = TEXT_SCALE * PX_TO_PT  # text_layer unit -> pt
 
     def walk(node: Tag):
@@ -95,10 +109,10 @@ def build():
         draw_images(page, soup, n)  # z-index 1
         tw = fitz.TextWriter(page.rect)
         for div in soup.select(".text_layer div[class^=ff]"):  # z-index 2
-            font, serif = fonts.get(div["class"][0], (fitz.Font("helv"), False))
+            font, base = fonts.get(div["class"][0], (fitz.Font("helv"), baseline_factor(*ARIAL_TIMES_METRICS[False])))
             fs = px(parse_style(div.get("style")).get("font-size"))
             for span in div.find_all("span", class_="a", recursive=False):
-                layout_span(span, font, serif, fs, tw)
+                layout_span(span, font, base, fs, tw)
         tw.write_text(page)
     OUT.mkdir(exist_ok=True)
     out = OUT / "method_a_pymupdf.pdf"

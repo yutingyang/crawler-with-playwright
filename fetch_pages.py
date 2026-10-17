@@ -16,6 +16,9 @@ def main():
     got = {}
 
     def on_response(resp):
+        if resp.url.endswith("/ttfs.css"):  # @font-face for ff0..ffN (cross-origin, so read the response itself)
+            (OUT / "ttfs.css").write_bytes(resp.body())
+            return
         m = re.search(r"/(pages|images)/(\d+)-[0-9a-f]+\.(jsonp|jpg|png)", resp.url)
         if not m or int(m.group(2)) > N_PAGES:
             return

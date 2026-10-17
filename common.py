@@ -1,4 +1,5 @@
 """Shared helpers: read the captured pages and the viewer's CSS."""
+import base64
 import json
 import re
 from pathlib import Path
@@ -26,6 +27,23 @@ def viewer_rules() -> list[str]:
     rules = json.loads((DATA / "css_info.json").read_text(encoding="utf-8"))["rules"]
     skip = ("blurred_page", "extracted_term", "display: none")
     return [r for r in rules if not any(s in r for s in skip)]
+
+
+def font_css() -> str:
+    """The viewer's ttfs.css: one @font-face per ffN, each a base64 TTF data URI."""
+    return (DATA / "ttfs.css").read_text(encoding="utf-8")
+
+
+def font_files() -> dict[str, bytes]:
+    """ffN -> TTF bytes decoded from ttfs.css."""
+    faces = re.findall(r"@font-face\s*\{(.*?)\}", font_css(), re.S)
+    out = {}
+    for face in faces:
+        fam = re.search(r"font-family:\s*['\"]?(ff\d+)", face)
+        data = re.search(r"base64,([A-Za-z0-9+/=]+)", face)
+        if fam and data:
+            out[fam.group(1)] = base64.b64decode(data.group(1))
+    return out
 
 
 def parse_style(style: str) -> dict[str, str]:
