@@ -84,7 +84,8 @@ def layout_span(span: Tag, font: fitz.Font, base: float, fs: float, tw: fitz.Tex
                 for ch in str(child).replace("\n", ""):
                     if not ch.isspace():
                         tw.append((x * k, baseline * k), ch, font=font, fontsize=fs * k)
-                    x += font.text_length(ch, fs) + letter_sp + (word_sp if ch == " " else 0)
+                    # CSS word-spacing applies to U+0020 and U+00A0 (spans after a heading start with &nbsp;)
+                    x += font.text_length(ch, fs) + letter_sp + (word_sp if ch in " \xa0" else 0)
             elif isinstance(child, Tag):
                 cst, classes = parse_style(child.get("style")), child.get("class", [])
                 for c in classes:  # span.l3 = margin-left:-3px, span.w8 = width:8px
