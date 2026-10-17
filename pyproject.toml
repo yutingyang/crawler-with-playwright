@@ -1,0 +1,19 @@
+[project]
+name = "crawler-with-playwright"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "yutingyang", email = "t105310099@ntut.org.tw" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "playwright>=1.64.0",
+]
+
+[project.scripts]
+crawler-with-playwright = "crawler_with_playwright:main"
+
+[build-system]
+requires = ["uv_build>=0.12.20,<0.13.0"]
+build-backend = "uv_build"
