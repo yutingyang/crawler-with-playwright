@@ -1,17 +1,12 @@
-"""Shared helpers: read the captured pages and the viewer's CSS."""
+"""Reading the captured data in DATA (written by fetch)."""
 import base64
 import json
 import re
 from pathlib import Path
 
-DATA = Path("data")
-OUT = Path("output")
-PAGES = [1, 2, 3]
+from .config import DATA
 
-PAGE_W_PX, PAGE_H_PX = 902, 1167  # .newpage size in the jsonp
-TEXT_SCALE = 0.2                  # .text_layer { transform: scale(0.2) }
-LETTER_W_PT = 612                 # 8.5in; 902px / 8.5in ≈ 106 dpi, 1167px / 11in ≈ 106 dpi -> US Letter
-PX_TO_PT = LETTER_W_PT / PAGE_W_PX
+IMAGE_SUFFIXES = {".webp", ".jpg", ".png"}
 
 
 def page_html(n: int) -> str:
@@ -19,12 +14,12 @@ def page_html(n: int) -> str:
 
 
 def page_image(n: int) -> Path:
-    return next(DATA.glob(f"page{n}.*[!l]"))  # page{n}.webp / .jpg / .png (not .html)
+    return next(p for p in DATA.glob(f"page{n}.*") if p.suffix in IMAGE_SUFFIXES)
 
 
 def viewer_rules() -> list[str]:
-    """CSS rules captured from the live viewer, minus the ones that only matter there."""
-    rules = json.loads((DATA / "css_info.json").read_text(encoding="utf-8"))["rules"]
+    """Layout CSS captured from the viewer, minus the rules that only matter inside the viewer."""
+    rules = json.loads((DATA / "viewer_rules.json").read_text(encoding="utf-8"))
     skip = ("blurred_page", "extracted_term", "display: none")
     return [r for r in rules if not any(s in r for s in skip)]
 
@@ -36,9 +31,8 @@ def font_css() -> str:
 
 def font_files() -> dict[str, bytes]:
     """ffN -> TTF bytes decoded from ttfs.css."""
-    faces = re.findall(r"@font-face\s*\{(.*?)\}", font_css(), re.S)
     out = {}
-    for face in faces:
+    for face in re.findall(r"@font-face\s*\{(.*?)\}", font_css(), re.S):
         fam = re.search(r"font-family:\s*['\"]?(ff\d+)", face)
         data = re.search(r"base64,([A-Za-z0-9+/=]+)", face)
         if fam and data:
@@ -46,7 +40,7 @@ def font_files() -> dict[str, bytes]:
     return out
 
 
-def parse_style(style: str) -> dict[str, str]:
+def parse_style(style: str | None) -> dict[str, str]:
     out = {}
     for decl in (style or "").split(";"):
         if ":" in decl:

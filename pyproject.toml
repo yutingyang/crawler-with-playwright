@@ -1,7 +1,7 @@
-[project]
+﻿[project]
 name = "crawler-with-playwright"
 version = "0.1.0"
-description = "Add your description here"
+description = "Study how Scribd renders documents (image + text layers) and rebuild pages as PDF"
 readme = "README.md"
 authors = [
     { name = "yutingyang", email = "t105310099@ntut.org.tw" }

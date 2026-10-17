@@ -3,17 +3,18 @@
 Coordinate pipeline
     text_layer units --x0.2--> page px --x(612/902)--> PDF pt
     image_layer units ---------> page px --x(612/902)--> PDF pt
-Both the browser and PDF use a top-left origin in PyMuPDF, so y needs no flipping.
+PyMuPDF uses a top-left origin like the browser, so y needs no flipping.
 """
 import io
 import re
+from pathlib import Path
 
-import fitz  # PyMuPDF
+import pymupdf
 from bs4 import BeautifulSoup, NavigableString, Tag
 from PIL import Image
 
-from common import (OUT, PAGE_H_PX, PAGE_W_PX, PAGES, PX_TO_PT, TEXT_SCALE,
-                    font_files, page_html, page_image, parse_style, px, viewer_rules)
+from .assets import font_files, page_html, page_image, parse_style, px, viewer_rules
+from .config import PAGE_H_PX, PAGE_W_PX, PAGES, PDF_A, PX_TO_PT, TEXT_SCALE
 
 # Fallback when an ffN web font is missing: the CSS falls back to Arial / Times New Roman,
 # whose metrics match PDF Base-14 Helvetica / Times.
@@ -29,8 +30,8 @@ def baseline_factor(ascender: float, descender: float) -> float:
     return (1 + ascender + descender) / 2
 
 
-def font_table():
-    """div.ffN -> (fitz.Font, baseline factor).
+def font_table() -> dict[str, tuple[pymupdf.Font, float]]:
+    """div.ffN -> (font, baseline factor).
 
     Prefer the real web font embedded in ttfs.css (what the viewer actually renders with);
     glyph widths must match, otherwise long spans drift away from the next absolutely-positioned span.
@@ -43,16 +44,16 @@ def font_table():
             continue
         ff = m.group(1)
         if ff in embedded:
-            font = fitz.Font(fontbuffer=embedded[ff])
+            font = pymupdf.Font(fontbuffer=embedded[ff])
             table[ff] = (font, baseline_factor(font.ascender, font.descender))
         else:
             serif = "Times" in m.group(2)
-            font = fitz.Font(BASE14[(serif, m.group(3) == "bold", m.group(4) == "italic")])
+            font = pymupdf.Font(BASE14[(serif, m.group(3) == "bold", m.group(4) == "italic")])
             table[ff] = (font, baseline_factor(*ARIAL_TIMES_METRICS[serif]))
     return table
 
 
-def draw_images(page: fitz.Page, soup: BeautifulSoup, n: int):
+def draw_images(page: pymupdf.Page, soup: BeautifulSoup, n: int) -> None:
     src = Image.open(page_image(n)).convert("RGBA")  # sprite png is transparent; RGB would turn it black
     for img in soup.select(".image_layer img"):
         st = parse_style(img.get("style"))
@@ -62,14 +63,14 @@ def draw_images(page: fitz.Page, soup: BeautifulSoup, n: int):
         ct, cr, cb, cl = clip
         sx, sy = src.width / w, src.height / h  # displayed box -> source pixels
         crop = src.crop((round(cl * sx), round(ct * sy), round(cr * sx), round(cb * sy)))
-        rect = fitz.Rect((left + cl) * PX_TO_PT, (top + ct) * PX_TO_PT,
-                         (left + cr) * PX_TO_PT, (top + cb) * PX_TO_PT)
+        rect = pymupdf.Rect((left + cl) * PX_TO_PT, (top + ct) * PX_TO_PT,
+                            (left + cr) * PX_TO_PT, (top + cb) * PX_TO_PT)
         buf = io.BytesIO()
         crop.save(buf, "PNG")
         page.insert_image(rect, stream=buf.getvalue())
 
 
-def layout_span(span: Tag, font: fitz.Font, base: float, fs: float, tw: fitz.TextWriter):
+def layout_span(span: Tag, font: pymupdf.Font, base: float, fs: float, tw: pymupdf.TextWriter) -> None:
     """Replay the browser's inline layout of one span.a, glyph by glyph, in text_layer units."""
     st = parse_style(span.get("style"))
     letter_sp, word_sp = px(st.get("letter-spacing")), px(st.get("word-spacing"))
@@ -101,25 +102,22 @@ def layout_span(span: Tag, font: fitz.Font, base: float, fs: float, tw: fitz.Tex
     walk(span)
 
 
-def build():
+def build(out: Path = PDF_A) -> Path:
     fonts = font_table()
-    doc = fitz.open()
+    fallback = (pymupdf.Font("helv"), baseline_factor(*ARIAL_TIMES_METRICS[False]))
+    doc = pymupdf.open()
     for n in PAGES:
         soup = BeautifulSoup(page_html(n), "html.parser")
         page = doc.new_page(width=PAGE_W_PX * PX_TO_PT, height=PAGE_H_PX * PX_TO_PT)
         draw_images(page, soup, n)  # z-index 1
-        tw = fitz.TextWriter(page.rect)
+        tw = pymupdf.TextWriter(page.rect)
         for div in soup.select(".text_layer div[class^=ff]"):  # z-index 2
-            font, base = fonts.get(div["class"][0], (fitz.Font("helv"), baseline_factor(*ARIAL_TIMES_METRICS[False])))
+            font, base = fonts.get(div["class"][0], fallback)
             fs = px(parse_style(div.get("style")).get("font-size"))
             for span in div.find_all("span", class_="a", recursive=False):
                 layout_span(span, font, base, fs, tw)
         tw.write_text(page)
-    OUT.mkdir(exist_ok=True)
-    out = OUT / "method_a_pymupdf.pdf"
-    doc.save(out, garbage=3, deflate=True, subset_fonts=True)
+    out.parent.mkdir(exist_ok=True)
+    doc.save(out, garbage=3, deflate=True)
     print("wrote", out)
-
-
-if __name__ == "__main__":
-    build()
+    return out

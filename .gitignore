@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Captured data and generated output
+data/
+output/
